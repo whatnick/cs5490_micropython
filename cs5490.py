@@ -109,7 +109,10 @@ regtable = (  # (address, string:name, int:default)
     # HW page 0
     (CONFIG0, 'config0', 0xC02000),
     (CONFIG1, 'config1', 0x00EEEE),
+    (PC, 'PhaseComp', 0),
     (SERIALCTRL, 'serialctrl', 0x02004D),
+    (PULSEWIDTH, 'pulsewidth', 1),
+    (PULSECTRL, 'pulsectrl', 0),
     (STATUS0, 'status0', 0x800000),
     (STATUS1, 'status1', 0x801800),
     (STATUS2, 'status2', 0),
@@ -133,6 +136,9 @@ regtable = (  # (address, string:name, int:default)
     (I_GAIN, 'i_gain', 0x400000),
     (V_GAIN, 'v_gain', 0x400000),
     (T_GAIN, 't_gain', 0x06B716),
+
+    #SW page 18
+    (PULSERATE, 'pulserate', 0x800000),
 )
 
 reginfo = collections.OrderedDict(((r[0], r[1:]) for r in regtable))
@@ -266,17 +272,20 @@ class cs5490(object):
         '''Write converted value to register
         If register is a fixed point number, the float val will be converted
         automatically'''
-        if self.debug:
-            info = reginfo.get(register, ('unknown', 0))
-            print('Write %10s = %s' % (info[0], val))
 
         fracbits = register & FRAC_MASK
         if fracbits:  # Register is fixed point number
             fracbits >>= FRAC_SHFT
             signed = register & SIGN_MASK
-            val = f2q(val, fracbits)
+            raw = f2q(val, fracbits)
+        else:
+            raw = val
 
-        self.write_raw_register(register, val)
+        if self.debug:
+            info = reginfo.get(register, ('%x' % register, 0))
+            print('Write %10s = %s (%06X)' % (info[0], val, raw))
+
+        self.write_raw_register(register, raw)
 
     def instruction(self, instr):
         self.serial.write(bytearray([CMD_INST | instr]))
@@ -299,6 +308,20 @@ def main():
         for addr, info in reginfo.items():
             v = chip.read_register(addr)
 
+    chip.debug = True
+
+    chip.write_register(PULSEWIDTH, 0x010000 | 1000) # range | width = 250us + value/64000
+    chip.write_register(PULSERATE, 0.01) # rate = 2000 * value
+    chip.write_register(PULSECTRL, 0)  # Pavg
+
+    config1 = reginfo[CONFIG1][1]  # default
+    config1 |= 0x100000   # Enable EPG_ON | DO_OD
+    chip.write_register(CONFIG1, config1)
+    time.sleep(0.12)
+    config1 &= 0xFFFFF0
+    config1 |= 0x000000  # DOMODE  B=V zero cross, 0=EPG
+    chip.write_register(CONFIG1, config1)
+
     config2 =  0x100200  # default
     config2 |= 0x00000A  # Enable HPF
     #config2 |= 0x004000  # Set APCM bit
@@ -309,6 +332,8 @@ def main():
     #pc = 0x1001FF # CPCC=1 FPCC=511, max delay in current, lagging PF
     pc = 77  # 114 = delay 1 degree in current, 1=0.008789 degrees
     chip.write_register(PC, pc)
+
+    chip.debug = False
 
     # Change Voltage Gain
     #gain = 1.0
