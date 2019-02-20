@@ -197,19 +197,22 @@ if False:
 class cs5490(object):
     '''Represent a CS5490 power monitor chip attached to a serial port
     '''
-    def __init__(self, serial, debug=False):
+    def __init__(self, portname, baudrate=600, debug=False):
         '''serial is a serial.Serial object or equivalent'''
         self.current_page = None
-        self.serial = serial
+        self.serial = serial.Serial(port=portname, baudrate=600)
         self.debug = debug
         self.reset()
+        self.baud(baudrate)
 
     def reset(self):
+        time.sleep(0.01)
         self.serial.dtr = 1  # physical low
         self.serial.baudrate = 600
-        time.sleep(0.1)
+        time.sleep(0.01)
+        self.serial.flushInput()
         self.serial.dtr = 0  # physical high
-        time.sleep(0.5)
+        time.sleep(0.3)
 
     def baud(self, rate):
         '''Switch baud rate.  Some problems with this!'''
@@ -295,14 +298,7 @@ class cs5490(object):
 
 def main():
     portname = '/dev/serial/by-id/usb-FTDI_FT232R_USB_UART_A6007wZa-if00-port0'
-    sp = serial.Serial(port=portname, baudrate=600)
-    chip = cs5490(sp, debug=False)
-
-    ## Perform Soft RESET
-    chip.reset()
-    chip.instruction(SOFT_RESET)
-
-    # chip.baud(9600)
+    chip = cs5490(portname, 115200, debug=True)
 
     if chip.debug:
         for addr, info in reginfo.items():
@@ -310,12 +306,12 @@ def main():
 
     chip.debug = True
 
-    chip.write_register(PULSEWIDTH, 0x010000 | 1000) # range | width = 250us + value/64000
+    chip.write_register(PULSEWIDTH, (1 << 16) | 1000) # range | width = 250us + value/64000
     chip.write_register(PULSERATE, 0.01) # rate = 2000 * value
     chip.write_register(PULSECTRL, 0)  # Pavg
 
     config1 = reginfo[CONFIG1][1]  # default
-    config1 |= 0x100000   # Enable EPG_ON | DO_OD
+    config1 |= 0x110000   # Enable EPG_ON | DO_OD
     chip.write_register(CONFIG1, config1)
     time.sleep(0.12)
     config1 &= 0xFFFFF0
@@ -347,6 +343,10 @@ def main():
 
     chip.instruction(CONT_CONV)
     time.sleep(1)
+
+    later = time.time()
+    interval = 1.0
+
     # # Read Instantaneous voltage,current and power
     n = 10
     while n > 0:
@@ -355,7 +355,8 @@ def main():
         i = chip.read_register(I_RMS) * iscale
         p = chip.read_register(P_AVG) * pscale  # Active power
         q = chip.read_register(Q_AVG) * pscale  # Reactive power
-        s = chip.read_register(S) * pscale  # Apparent power
+        # s = chip.read_register(S) * pscale  # Apparent power
+        s = v * i
 
         pf = chip.read_register(PF)
         phase = math.degrees(math.acos(pf))
@@ -364,8 +365,10 @@ def main():
 
         print("{:.3f}Vrms  {:.3f}Arms  P={:.3f}Wavg  Q={:.3f}VARavg".format(v, i, p, q))
         print("{:.2f}Hz  {:.1f}℃   S={:.3f}VA  PF={:.3f}  Phase={:5.3f}°".format(freq, t, s, pf, phase))
-        print('-' * 40)
-        time.sleep(1)
+        print('-' * 60)
+
+        later += interval
+        time.sleep(max(0, later - time.time()))
 
 
 if __name__ == '__main__':
